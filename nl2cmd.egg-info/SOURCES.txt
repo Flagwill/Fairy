@@ -1,0 +1,13 @@
+Readme.md
+pyproject.toml
+nl2cmd/__init__.py
+nl2cmd/cli.py
+nl2cmd/copilot_client.py
+nl2cmd/executor.py
+nl2cmd/prompt.py
+nl2cmd/translator.py
+nl2cmd.egg-info/PKG-INFO
+nl2cmd.egg-info/SOURCES.txt
+nl2cmd.egg-info/dependency_links.txt
+nl2cmd.egg-info/entry_points.txt
+nl2cmd.egg-info/top_level.txt

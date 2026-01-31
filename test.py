@@ -7,7 +7,7 @@ async def main():
     await client.start()
 
     # Create a session
-    session = await client.create_session({"model": "gpt-5"})
+    session = await client.create_session({"model": "gpt-5-mini"})
 
     # Wait for response using session.idle event
     done = asyncio.Event()

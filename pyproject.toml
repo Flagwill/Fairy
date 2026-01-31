@@ -1,0 +1,14 @@
+[project]
+name = "nl2cmd"
+version = "0.1.0"
+description = "Natural language to terminal command translator using GitHub Copilot"
+requires-python = ">=3.10"
+readme = "Readme.md"
+license = { text = "Proprietary" }
+
+[project.scripts]
+trans = "nl2cmd.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nl2cmd*"]

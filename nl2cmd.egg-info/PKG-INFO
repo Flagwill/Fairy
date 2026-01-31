@@ -1,3 +1,11 @@
+Metadata-Version: 2.4
+Name: nl2cmd
+Version: 0.1.0
+Summary: Natural language to terminal command translator using GitHub Copilot
+License: Proprietary
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
 # NL2CMD：自然语言到命令行翻译器（基于 GitHub Copilot）
 
 一个终端工具：在任意终端输入 `trans "一句自然语言"`，它将调用大模型把自然语言翻译为可执行的 Shell 命令，并提供修改或一键执行的选择。
