@@ -2,6 +2,13 @@
 
 一个终端工具：在任意终端输入 `trans "一句自然语言"`，它将调用大模型把自然语言翻译为可执行的 Shell 命令，并提供修改或一键执行的选择。
 
+使用前需要安装[Github Copilot Cli](https://github.com/features/copilot/cli/)与[GitHub Copilot SDK](https://github.com/github/copilot-sdk/tree/main)
+```bash
+brew install copilot-cli
+pip install github-copilot-sdk
+```
+
+
 ## 快速开始
 
 - 本地运行（无需安装）：
@@ -57,4 +64,4 @@ trans "压缩当前目录为zip并排除node_modules"
 
 ## 许可证
 
-仅供本仓库/工作区使用，未授权公开分发。
+本项目采用 MIT 许可证发布。详情见 [LICENSE](LICENSE)。
