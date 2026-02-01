@@ -1,2 +1,0 @@
-[console_scripts]
-trans = nl2cmd.cli:main
