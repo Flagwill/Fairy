@@ -1,29 +1,13 @@
 import asyncio
-import random
 import sys
 
-from copilot.tools import define_tool
-from pydantic import BaseModel, Field
-
 from fairy_llm_gateway import LLMGateway
-
-
-class GetWeatherParams(BaseModel):
-    city: str = Field(description="The name of the city to get weather for")
-
-
-@define_tool(description="Get the current weather for a city")
-async def get_weather(params: GetWeatherParams) -> dict:
-    city = params.city
-    conditions = ["sunny", "cloudy", "rainy", "partly cloudy"]
-    temp = random.randint(50, 80)
-    condition = random.choice(conditions)
-    return {"city": city, "temperature": f"{temp}°F", "condition": condition}
+from tools.system.simple_cmd.terminal_tool import run_shell_command_tool
 
 
 async def main():
     history = []
-    gateway = LLMGateway(model="gpt-4.1", streaming=True, tools=[get_weather])
+    gateway = LLMGateway(model="gpt-4.1", streaming=True, tools=[run_shell_command_tool])
 
     async with gateway:
         def stream_printer(delta: str) -> None:
@@ -32,8 +16,8 @@ async def main():
 
         gateway.add_stream_handler(stream_printer)
 
-        print("Weather Assistant (type 'exit' to quit)")
-        print("Try: 'What is the weather in Paris?' or 'Compare weather in NYC and LA'\n")
+        print("Terminal Assistant (type 'exit' to quit)")
+        print("Try: 'Run ls', 'Show current directory (pwd)', or 'List python files in tools'\n")
 
         while True:
             try:
