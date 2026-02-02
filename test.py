@@ -1,31 +1,54 @@
 import asyncio
-from copilot import CopilotClient
+import random
+import sys
+
+from copilot.tools import define_tool
+from pydantic import BaseModel, Field
+
+from fairy_llm_gateway import LLMGateway
+
+
+class GetWeatherParams(BaseModel):
+    city: str = Field(description="The name of the city to get weather for")
+
+
+@define_tool(description="Get the current weather for a city")
+async def get_weather(params: GetWeatherParams) -> dict:
+    city = params.city
+    conditions = ["sunny", "cloudy", "rainy", "partly cloudy"]
+    temp = random.randint(50, 80)
+    condition = random.choice(conditions)
+    return {"city": city, "temperature": f"{temp}°F", "condition": condition}
+
 
 async def main():
-    # Create and start client
-    client = CopilotClient()
-    await client.start()
+    history = []
+    gateway = LLMGateway(model="gpt-4.1", streaming=True, tools=[get_weather])
 
-    # Create a session
-    session = await client.create_session({"model": "gpt-5-mini"})
+    async with gateway:
+        def stream_printer(delta: str) -> None:
+            sys.stdout.write(delta)
+            sys.stdout.flush()
 
-    # Wait for response using session.idle event
-    done = asyncio.Event()
+        gateway.add_stream_handler(stream_printer)
 
-    def on_event(event):
-        if event.type.value == "assistant.message":
-            print(event.data.content)
-        elif event.type.value == "session.idle":
-            done.set()
+        print("Weather Assistant (type 'exit' to quit)")
+        print("Try: 'What is the weather in Paris?' or 'Compare weather in NYC and LA'\n")
 
-    session.on(on_event)
+        while True:
+            try:
+                user_input = input("You: ")
+            except EOFError:
+                break
 
-    # Send a message and wait for completion
-    await session.send({"prompt": "What is 2+2?"})
-    await done.wait()
+            if user_input.lower() == "exit":
+                break
 
-    # Clean up
-    await session.destroy()
-    await client.stop()
+            history.append({"role": "user", "content": user_input})
+            sys.stdout.write("Assistant: ")
+            assistant_reply = await gateway.ask_and_collect(user_input, messages=history)
+            history.append({"role": "assistant", "content": assistant_reply})
+            print("\n")
+
 
 asyncio.run(main())
