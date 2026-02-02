@@ -40,18 +40,21 @@ async with LLMGateway(streaming=True) as gateway:
 ```
 
 ## API surface
-- `LLMGateway(model="gpt-4.1", streaming=True, tools=None, session_options=None)`
+- `LLMGateway(model="gpt-4.1", streaming=True, tools=None, session_options=None, request_timeout=None)`
   - Creates a gateway with the given model and optional tool list.
   - `session_options` is merged into the session payload (for extra Copilot parameters).
+  - `request_timeout` sets the default seconds to wait for a response before timing out (overrides the Copilot default of 60s).
 - `start()` / `stop()`
   - Manually manage the client lifecycle. Typically use `async with LLMGateway(...)`.
 - `add_stream_handler(handler)` / `remove_stream_handler(handler)`
   - Register callbacks that receive delta tokens when `streaming=True`.
-- `ask(prompt, messages=None, metadata=None)`
+- `ask(prompt, messages=None, metadata=None, timeout=None)`
   - Send a prompt (and optional message history or metadata) and wait for completion.
+  - `timeout` overrides `request_timeout` for this call only.
   - Returns the raw result from `session.send_and_wait`.
-- `ask_and_collect(prompt, messages=None, metadata=None)`
+- `ask_and_collect(prompt, messages=None, metadata=None, timeout=None)`
   - Streaming helper that joins all delta tokens into a single string.
+  - `timeout` overrides `request_timeout` for this call only.
 
 ## Notes
 - Tool functions must be decorated with `@define_tool` from `copilot.tools` and must be async.

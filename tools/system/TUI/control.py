@@ -8,6 +8,10 @@ from copilot.tools import define_tool
 from pydantic import BaseModel, Field, field_validator
 
 
+# Small delay to let the shell produce output before a subsequent capture.
+_POST_SEND_DELAY_SEC = 0.5
+
+
 async def _run_tmux(args: List[str]) -> str:
     if shutil.which("tmux") is None:
         raise RuntimeError("tmux is not installed or not on PATH")
@@ -23,8 +27,8 @@ async def _run_tmux(args: List[str]) -> str:
 
 
 class CreateSessionParams(BaseModel):
-    session: str = Field(default="fairy_demo", description="tmux session name")
-    start_command: str = Field(default="bash", description="Command executed in the new session")
+    session: str = Field(default="fairy_demo")
+    start_command: str = Field(default="bash")
 
     @field_validator("session")
     @classmethod
@@ -57,13 +61,13 @@ async def tmux_create_session_impl(params: CreateSessionParams) -> Dict[str, obj
 
 
 tmux_create_session = define_tool(
-    description="Ensure a tmux session exists; create it if missing"
+    description="使用交互式命令行的工具，确保会话存在或创建"
 )(tmux_create_session_impl)
 
 
 class SendKeysParams(BaseModel):
-    target: str = Field(default="fairy_demo:0.0", description="Target pane: session:window.pane")
-    commands: List[str] = Field(..., min_length=1, description="Commands to send; Enter appended after each")
+    target: str = Field(default="fairy_demo:0.0")
+    commands: List[str] = Field(..., min_length=1)
 
     @field_validator("target")
     @classmethod
@@ -77,6 +81,9 @@ async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
     for command in params.commands:
         await _run_tmux(["send-keys", "-t", params.target, command])
         await _run_tmux(["send-keys", "-t", params.target, "Enter"])
+        await asyncio.sleep(_POST_SEND_DELAY_SEC)
+
+    await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
     return {
         "target": params.target,
@@ -85,5 +92,5 @@ async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
 
 
 tmux_send_keys = define_tool(
-    description="Send one or more commands to a tmux pane (each followed by Enter)"
+    description="使用交互式命令行的工具，向窗格发送命令"
 )(tmux_send_keys_impl)

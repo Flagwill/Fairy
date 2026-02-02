@@ -9,39 +9,43 @@ from tools.system.TUI import (
     CreateSessionParams,
     ScreenParams,
     SendKeysParams,
-    tmux_create_session_impl,
-    tmux_send_keys_impl,
+    tmux_create_session,
+    tmux_send_keys,
     tmux_view_screen,
     tmux_view_screen_impl,
 )
 
 
 async def main() -> None:
-    session = "fairy_demo"
-    target = f"{session}:0.0"
 
     try:
-        await tmux_create_session_impl(CreateSessionParams(session=session, start_command="bash"))
-        await tmux_send_keys_impl(
-            SendKeysParams(
-                target=target,
-                commands=[
-                    "ls",
-                ],
-            )
-        )
+        async with LLMGateway(
+            model="gpt-4.1",
+            streaming=True,
+            tools=[tmux_create_session, tmux_view_screen, tmux_send_keys],
+            request_timeout=300.0,
+        ) as gateway:
+            prompt = "使用工具创建交互式终端，使用nano命令打开文本编辑器，查看并输出Readme.md中的内容，然后告诉我你的操作"
 
-        capture = await tmux_view_screen_impl(ScreenParams(target=target, lines=120, normalize=True))
-        print("\n=== Direct tmux capture ===")
-        print(capture.get("plain_text") or "Pane is empty or not accessible.")
+            reasoning_started = False
 
-        print("\n=== LLM-driven capture ===")
-        async with LLMGateway(model="gpt-4.1", streaming=True, tools=[tmux_view_screen]) as gateway:
-            prompt = (
-                f"Call tmux_view_screen with target '{target}', 120 lines, normalize=true; "
-                "return plain_text only."
-            )
-            summary = await gateway.ask_and_collect(prompt)
+            def stream_printer(delta: str, is_reasoning: bool) -> None:
+                nonlocal reasoning_started
+                if is_reasoning and not reasoning_started:
+                    print("[思考过程] ", end="", flush=True)
+                    reasoning_started = True
+                elif not is_reasoning and reasoning_started:
+                    print("\n[回答] ", end="", flush=True)
+                    reasoning_started = False
+                print(delta, end="", flush=True)
+
+            gateway.add_stream_handler(stream_printer)
+            try:
+                summary = await gateway.ask_and_collect(prompt)
+            finally:
+                gateway.remove_stream_handler(stream_printer)
+
+            print("\n--- 收到完整回复 ---")
             print(summary)
     except Exception as exc:  # noqa: BLE001 - demo-friendly surface of errors
         print(f"Demo failed: {exc}")

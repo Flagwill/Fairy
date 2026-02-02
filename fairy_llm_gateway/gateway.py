@@ -5,7 +5,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from copilot import CopilotClient
 from copilot.generated.session_events import SessionEventType
 
-StreamHandler = Callable[[str], None]
+# Streaming handlers receive the text delta and whether it is reasoning.
+StreamHandler = Callable[[str, bool], None]
 
 
 class LLMGateway:
@@ -18,11 +19,13 @@ class LLMGateway:
         streaming: bool = True,
         tools: Optional[Sequence[Any]] = None,
         session_options: Optional[Dict[str, Any]] = None,
+        request_timeout: Optional[float] = None,
     ) -> None:
         self.model = model
         self.streaming = streaming
         self.tools = list(tools) if tools else []
         self.session_options = dict(session_options or {})
+        self.request_timeout = request_timeout
 
         self._client = CopilotClient()
         self._session = None
@@ -70,15 +73,23 @@ class LLMGateway:
             self._stream_handlers.remove(handler)
 
     def _handle_event(self, event: Any) -> None:
-        if event.type != SessionEventType.ASSISTANT_MESSAGE_DELTA:
+        if event.type not in (
+            SessionEventType.ASSISTANT_MESSAGE_DELTA,
+            SessionEventType.ASSISTANT_REASONING_DELTA,
+        ):
             return
 
         delta = getattr(event.data, "delta_content", "")
         if not delta:
             return
 
+        is_reasoning = event.type == SessionEventType.ASSISTANT_REASONING_DELTA
+        # Providers may inject markers like "[reasoning]" into tokens; strip
+        # them so downstream handlers control formatting.
+        delta = delta.replace("[reasoning]", "")
+
         for handler in list(self._stream_handlers):
-            handler(delta)
+            handler(delta, is_reasoning)
 
     async def ask(
         self,
@@ -86,6 +97,7 @@ class LLMGateway:
         *,
         messages: Optional[List[Dict[str, str]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Send a prompt (and optional history) and wait for completion."""
         if not self._session:
@@ -97,7 +109,8 @@ class LLMGateway:
         if metadata:
             payload["metadata"] = metadata
 
-        return await self._session.send_and_wait(payload)
+        effective_timeout = timeout if timeout is not None else self.request_timeout
+        return await self._session.send_and_wait(payload, timeout=effective_timeout)
 
     async def ask_and_collect(
         self,
@@ -105,19 +118,25 @@ class LLMGateway:
         *,
         messages: Optional[List[Dict[str, str]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> str:
-        """Send a prompt and collect streamed deltas into a single string."""
+        """Send a prompt and collect streamed deltas (including reasoning) into a single string."""
         if not self.streaming:
             raise RuntimeError("ask_and_collect requires streaming=True.")
 
         buffer: List[str] = []
 
-        def collector(delta: str) -> None:
+        def collector(delta: str, is_reasoning: bool) -> None:  # noqa: ARG001
             buffer.append(delta)
 
         self.add_stream_handler(collector)
         try:
-            await self.ask(prompt, messages=messages, metadata=metadata)
+            await self.ask(
+                prompt,
+                messages=messages,
+                metadata=metadata,
+                timeout=timeout,
+            )
         finally:
             self.remove_stream_handler(collector)
 

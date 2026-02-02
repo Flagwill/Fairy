@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import pyte
 from copilot.tools import define_tool
@@ -11,28 +11,13 @@ from pydantic import BaseModel, Field, field_validator
 
 class ScreenParams(BaseModel):
     target: str = Field(
-        default="fairy:0.0",
-        description="Tmux target, e.g. session:window.pane",
+        default="fairy_demo:0.0",
     )
     lines: int = Field(
         default=200,
         ge=1,
         le=2000,
-        description="Number of lines from the bottom of the pane to capture",
     )
-    include_ansi: bool = Field(
-        default=False,
-        description="Return the raw ANSI buffer alongside parsed text",
-    )
-    normalize: bool = Field(
-        default=True,
-        description="Trim leading/trailing spaces per line and drop empty lines for readability",
-    )
-    join_wrapped: bool = Field(
-        default=True,
-        description="If True, tmux will join soft-wrapped lines to avoid mid-word breaks",
-    )
-
     @field_validator("target")
     @classmethod
     def _target_not_empty(cls, value: str) -> str:
@@ -91,16 +76,30 @@ def _normalize_text(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines()]
     # Drop lines that become empty after trimming
     lines = [ln for ln in lines if ln]
+    lines = _drop_leading_echo(lines)
     return "\n".join(lines)
+
+
+def _drop_leading_echo(lines: List[str]) -> List[str]:
+    if len(lines) < 2:
+        return lines
+
+    first, second = lines[0], lines[1]
+    # If the first line is immediately repeated as the tail of the next line (usually prompt + command), drop it.
+    if first and second.endswith(first) and second != first:
+        return lines[1:]
+
+    return lines
 
 
 async def tmux_view_screen_impl(params: ScreenParams) -> Dict[str, object]:
     width, height = await _pane_size(params.target)
-    ansi = await _capture_pane(params.target, params.lines, params.join_wrapped)
-    # Inflate height so pyte keeps as much scrollback as requested.
-    plain_text = _ansi_to_text(ansi, width, max(height, params.lines))
-    if params.normalize:
-        plain_text = _normalize_text(plain_text)
+    ansi = await _capture_pane(params.target, params.lines, True)
+    # Inflate size so pyte keeps as much scrollback as requested and avoid mid-line wraps.
+    render_width = max(width, 400)
+    render_height = max(height, params.lines)
+    plain_text = _ansi_to_text(ansi, render_width, render_height)
+    plain_text = _normalize_text(plain_text)
 
     result: Dict[str, object] = {
         "pane": params.target,
@@ -110,13 +109,10 @@ async def tmux_view_screen_impl(params: ScreenParams) -> Dict[str, object]:
         "plain_text": plain_text,
     }
 
-    if params.include_ansi:
-        result["raw_ansi"] = ansi
-
     return result
 
 
 # Tool exposed to the LLM runtime. keep impl separate so it can be called directly in Python.
 tmux_view_screen = define_tool(
-    description="Capture a tmux pane, parse ANSI, and return readable text"
+    description="使用交互式命令行的工具，捕获并返回可读文本"
 )(tmux_view_screen_impl)
