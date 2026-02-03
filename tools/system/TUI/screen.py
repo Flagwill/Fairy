@@ -54,6 +54,15 @@ async def _pane_size(target: str) -> Tuple[int, int]:
         raise RuntimeError(f"Unable to parse pane size for target {target!r}: {output!r}") from exc
 
 
+async def _pane_cursor(target: str) -> Tuple[int, int]:
+    output = await _run_tmux(("display-message", "-p", "-t", target, "#{cursor_x} #{cursor_y}"))
+    try:
+        x_str, y_str = output.strip().split()
+        return int(x_str), int(y_str)
+    except ValueError as exc:
+        raise RuntimeError(f"Unable to parse cursor position for target {target!r}: {output!r}") from exc
+
+
 async def _capture_pane(target: str, lines: int, join_wrapped: bool) -> str:
     start_offset = f"-{lines}"
     args = ["capture-pane", "-ep", "-t", target, "-S", start_offset]
@@ -94,6 +103,7 @@ def _drop_leading_echo(lines: List[str]) -> List[str]:
 
 async def tmux_view_screen_impl(params: ScreenParams) -> Dict[str, object]:
     width, height = await _pane_size(params.target)
+    cursor_x0, cursor_y0 = await _pane_cursor(params.target)
     ansi = await _capture_pane(params.target, params.lines, True)
     # Inflate size so pyte keeps as much scrollback as requested and avoid mid-line wraps.
     render_width = max(width, 400)
@@ -107,6 +117,14 @@ async def tmux_view_screen_impl(params: ScreenParams) -> Dict[str, object]:
         "height": height,
         "lines_captured": params.lines,
         "plain_text": plain_text,
+        "cursor": {
+            "column": cursor_x0 + 1,
+            "row": cursor_y0 + 1,
+            "zero_indexed": {
+                "column": cursor_x0,
+                "row": cursor_y0,
+            },
+        },
     }
 
     return result

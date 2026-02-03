@@ -69,6 +69,7 @@ class SendKeysParams(BaseModel):
     target: str = Field(default="fairy_demo:0.0")
     commands: Optional[List[str]] = None
     keys: Optional[List[str]] = None
+    text: Optional[List[str]] = None
     press_enter: bool = True
 
     @field_validator("target")
@@ -78,7 +79,7 @@ class SendKeysParams(BaseModel):
             raise ValueError("target cannot be empty")
         return value
 
-    @field_validator("commands", "keys")
+    @field_validator("commands", "keys", "text")
     @classmethod
     def _list_not_empty(cls, value: Optional[List[str]]) -> Optional[List[str]]:
         if value is None:
@@ -89,8 +90,8 @@ class SendKeysParams(BaseModel):
 
     @model_validator(mode="after")
     def _at_least_one(self) -> "SendKeysParams":
-        if not self.commands and not self.keys:
-            raise ValueError("either commands or keys must be provided")
+        if not self.commands and not self.keys and not self.text:
+            raise ValueError("either commands or keys or text must be provided")
         return self
 
 
@@ -99,6 +100,10 @@ def _format_tmux_key(raw: str) -> str:
     key = raw.strip()
     if not key:
         raise ValueError("key cannot be empty")
+
+    normalized = key.lower().replace(" ", "")
+    if normalized in {"shift+tab", "s-tab", "backtab", "btab"}:
+        return "BTab"
 
     parts = key.replace("control", "ctrl").replace("meta", "alt").split("+")
     if len(parts) == 1:
@@ -111,6 +116,26 @@ def _format_tmux_key(raw: str) -> str:
         mods.append(mod if mod else part)
 
     base = parts[-1].lower()
+    base_map = {
+        "pageup": "PageUp",
+        "page_up": "PageUp",
+        "pgup": "PageUp",
+        "pagedown": "PageDown",
+        "page_down": "PageDown",
+        "pgdn": "PageDown",
+        "up": "Up",
+        "down": "Down",
+        "left": "Left",
+        "right": "Right",
+        "enter": "Enter",
+        "return": "Enter",
+        "space": "Space",
+        "spacebar": "Space",
+        "tab": "Tab",
+        "esc": "Escape",
+        "escape": "Escape",
+    }
+    base = base_map.get(base, base)
     return "-".join([*mods, base])
 
 
@@ -120,6 +145,11 @@ async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
             await _run_tmux(["send-keys", "-t", params.target, command])
             if params.press_enter:
                 await _run_tmux(["send-keys", "-t", params.target, "Enter"])
+            await asyncio.sleep(_POST_SEND_DELAY_SEC)
+
+    if params.text:
+        for fragment in params.text:
+            await _run_tmux(["send-keys", "-t", params.target, fragment])
             await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
     if params.keys:
@@ -133,6 +163,7 @@ async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
     return {
         "target": params.target,
         "sent_commands": params.commands or [],
+        "sent_text": params.text or [],
         "sent_keys": params.keys or [],
     }
 
