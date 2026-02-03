@@ -6,13 +6,10 @@ import asyncio
 
 from fairy_llm_gateway import LLMGateway
 from tools.system.TUI import (
-    CreateSessionParams,
-    ScreenParams,
-    SendKeysParams,
-    tmux_create_session,
-    tmux_send_keys,
-    tmux_view_screen,
-    tmux_view_screen_impl,
+    create_session,
+    send_keys,
+    view_screen,
+    kill_session
 )
 
 
@@ -20,12 +17,12 @@ async def main() -> None:
 
     try:
         async with LLMGateway(
-            model="gpt-4.1",
+            model="gpt-5",
             streaming=True,
-            tools=[tmux_create_session, tmux_view_screen, tmux_send_keys],
-            request_timeout=300.0,
+            tools=[create_session, view_screen, send_keys, kill_session],
+            request_timeout=600.0,
         ) as gateway:
-            prompt = "使用工具创建交互式终端，使用nano命令打开文本编辑器，查看并输出Readme.md中的内容，然后告诉我你的操作"
+            prompt = "使用工具创建交互式终端，使用nano命令打开文本编辑器，查看并输出Readme.md中的内容，最后关闭编辑器并退出终端会话。"
 
             reasoning_started = False
 

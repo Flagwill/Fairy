@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from copilot.tools import define_tool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # Small delay to let the shell produce output before a subsequent capture.
-_POST_SEND_DELAY_SEC = 0.5
+_POST_SEND_DELAY_SEC = 1.0
 
 
 async def _run_tmux(args: List[str]) -> str:
@@ -60,14 +60,16 @@ async def tmux_create_session_impl(params: CreateSessionParams) -> Dict[str, obj
     }
 
 
-tmux_create_session = define_tool(
+create_session = define_tool(
     description="使用交互式命令行的工具，确保会话存在或创建"
 )(tmux_create_session_impl)
 
 
 class SendKeysParams(BaseModel):
     target: str = Field(default="fairy_demo:0.0")
-    commands: List[str] = Field(..., min_length=1)
+    commands: Optional[List[str]] = None
+    keys: Optional[List[str]] = None
+    press_enter: bool = True
 
     @field_validator("target")
     @classmethod
@@ -76,21 +78,89 @@ class SendKeysParams(BaseModel):
             raise ValueError("target cannot be empty")
         return value
 
+    @field_validator("commands", "keys")
+    @classmethod
+    def _list_not_empty(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("commands/keys cannot be empty when provided")
+        return value
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> "SendKeysParams":
+        if not self.commands and not self.keys:
+            raise ValueError("either commands or keys must be provided")
+        return self
+
+
+def _format_tmux_key(raw: str) -> str:
+    """Convert human-friendly combos (ctrl+c) to tmux key names."""
+    key = raw.strip()
+    if not key:
+        raise ValueError("key cannot be empty")
+
+    parts = key.replace("control", "ctrl").replace("meta", "alt").split("+")
+    if len(parts) == 1:
+        return parts[0]
+
+    mods_map = {"ctrl": "C", "alt": "M", "shift": "S"}
+    mods = []
+    for part in parts[:-1]:
+        mod = mods_map.get(part.lower())
+        mods.append(mod if mod else part)
+
+    base = parts[-1].lower()
+    return "-".join([*mods, base])
+
 
 async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
-    for command in params.commands:
-        await _run_tmux(["send-keys", "-t", params.target, command])
-        await _run_tmux(["send-keys", "-t", params.target, "Enter"])
-        await asyncio.sleep(_POST_SEND_DELAY_SEC)
+    if params.commands:
+        for command in params.commands:
+            await _run_tmux(["send-keys", "-t", params.target, command])
+            if params.press_enter:
+                await _run_tmux(["send-keys", "-t", params.target, "Enter"])
+            await asyncio.sleep(_POST_SEND_DELAY_SEC)
+
+    if params.keys:
+        for raw_key in params.keys:
+            tmux_key = _format_tmux_key(raw_key)
+            await _run_tmux(["send-keys", "-t", params.target, tmux_key])
+            await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
     await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
     return {
         "target": params.target,
-        "sent": params.commands,
+        "sent_commands": params.commands or [],
+        "sent_keys": params.keys or [],
     }
 
 
-tmux_send_keys = define_tool(
-    description="使用交互式命令行的工具，向窗格发送命令"
+send_keys = define_tool(
+    description="使用交互式命令行的工具，向窗格发送命令或快捷键"
 )(tmux_send_keys_impl)
+
+
+class KillSessionParams(BaseModel):
+    session: str = Field(default="fairy_demo")
+
+    @field_validator("session")
+    @classmethod
+    def _session_not_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("session cannot be empty")
+        return value
+
+
+async def tmux_kill_session_impl(params: KillSessionParams) -> Dict[str, object]:
+    await _run_tmux(["kill-session", "-t", params.session])
+    return {
+        "session": params.session,
+        "killed": True,
+    }
+
+
+kill_session = define_tool(
+    description="使用交互式命令行的工具，杀死指定 tmux 会话"
+)(tmux_kill_session_impl)

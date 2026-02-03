@@ -113,6 +113,6 @@ async def tmux_view_screen_impl(params: ScreenParams) -> Dict[str, object]:
 
 
 # Tool exposed to the LLM runtime. keep impl separate so it can be called directly in Python.
-tmux_view_screen = define_tool(
+view_screen = define_tool(
     description="使用交互式命令行的工具，捕获并返回可读文本"
 )(tmux_view_screen_impl)
