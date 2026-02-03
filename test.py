@@ -17,7 +17,7 @@ async def main() -> None:
 
     try:
         async with LLMGateway(
-            model="gpt4.1",
+            model="gpt-5",
             streaming=True,
             tools=[create_session, view_screen, send_keys, kill_session],
             request_timeout=600.0,
