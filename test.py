@@ -11,18 +11,23 @@ from tools.system.TUI import (
     view_screen,
     kill_session
 )
+import importlib
+_delegate_module = importlib.import_module('tools.2_llms')
+delegate_task = _delegate_module.delegate_task
 
 
 async def main() -> None:
 
     try:
         async with LLMGateway(
-            model="gpt-5",
+            model="gpt-4.1",
             streaming=True,
-            tools=[create_session, view_screen, send_keys, kill_session],
+            tools=[create_session, send_keys, view_screen, kill_session],
             request_timeout=600.0,
         ) as gateway:
-            prompt = "使用nano命令打开文本编辑器，查看并输出Readme.md中的内容。"
+            prompt ='''
+                    使用nano命令打开文本编辑器，查看并输出Readme.md中的内容，然后直接退出编辑器并关闭终端。"
+                    '''
 
             reasoning_started = False
 

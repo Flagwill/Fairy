@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import logging
+import os
 from typing import Dict, List, Optional
 
 from copilot.tools import define_tool
@@ -9,21 +11,38 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # Small delay to let the shell produce output before a subsequent capture.
-_POST_SEND_DELAY_SEC = 1.0
+# Small delays help output flush without slowing interactions too much.
+_POST_SEND_DELAY_SEC = 0.1
+
+
+# Structured logger (enable via FAIRY_TUI_LOG=1, disable with 0/false/no)
+_LOG_ENABLED = os.getenv("FAIRY_TUI_LOG", "1").lower() not in {"0", "false", "no"}
+_logger = logging.getLogger("fairy.tui")
+if not _logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[TUI] %(asctime)s %(levelname)s: %(message)s"))
+    _logger.addHandler(_handler)
+_logger.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
+_logger.propagate = False
 
 
 async def _run_tmux(args: List[str]) -> str:
     if shutil.which("tmux") is None:
         raise RuntimeError("tmux is not installed or not on PATH")
 
+    _logger.debug("exec: tmux %s", " ".join(args))
     proc = await asyncio.create_subprocess_exec(
         "tmux", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
         detail = stderr.decode("utf-8", "replace") or stdout.decode("utf-8", "replace")
+        _logger.error("tmux failed rc=%s args=%s detail=%r", proc.returncode, args, detail.strip())
         raise RuntimeError(f"tmux {' '.join(args)} failed: {detail.strip()}")
-    return stdout.decode("utf-8", "replace")
+    out = stdout.decode("utf-8", "replace")
+    if out.strip():
+        _logger.debug("tmux stdout: %r", out.strip())
+    return out
 
 
 class CreateSessionParams(BaseModel):
@@ -45,6 +64,7 @@ async def tmux_create_session_impl(params: CreateSessionParams) -> Dict[str, obj
         await _run_tmux(["has-session", "-t", params.session])
     except RuntimeError:
         exists = False
+        _logger.info("session missing, creating: %s", params.session)
         await _run_tmux([
             "new-session",
             "-d",
@@ -52,6 +72,8 @@ async def tmux_create_session_impl(params: CreateSessionParams) -> Dict[str, obj
             params.session,
             params.start_command,
         ])
+    if exists:
+        _logger.info("session exists: %s", params.session)
 
     return {
         "session": params.session,
@@ -96,68 +118,137 @@ class SendKeysParams(BaseModel):
 
 
 def _format_tmux_key(raw: str) -> str:
-    """Convert human-friendly combos (ctrl+c) to tmux key names."""
+    """Convert human-friendly key combos (e.g. ctrl+c, C-c, <C-c>) to tmux key names.
+
+    Rules follow tmux key naming:
+    - Modifiers: C- (Ctrl), M- (Alt/Meta), S- (Shift)
+    - Special keys accepted by tmux: Up/Down/Left/Right, BSpace, BTab, DC (Delete),
+      End, Enter, Escape, F1..F12, Home, IC (Insert), NPage/PageDown/PgDn,
+      PPage/PageUp/PgUp, Space, Tab
+    """
     key = raw.strip()
     if not key:
         raise ValueError("key cannot be empty")
 
-    normalized = key.lower().replace(" ", "")
-    if normalized in {"shift+tab", "s-tab", "backtab", "btab"}:
-        return "BTab"
+    # Remove surrounding angle brackets often used in docs: <C-c>
+    if key.startswith("<") and key.endswith(">"):
+        key = key[1:-1]
 
-    parts = key.replace("control", "ctrl").replace("meta", "alt").split("+")
+    # Normalize common words and separators to a unified form
+    norm = (
+        key.replace("Control", "Ctrl").replace("control", "ctrl")
+        .replace("Meta", "Alt").replace("meta", "alt")
+        .replace(" ", "-").replace("+", "-")
+    )
+    parts = [p for p in norm.split("-") if p]
+
+    # If only a simple key without modifiers, map synonyms and return
+    def _map_base_name(name: str) -> str:
+        lower = name.lower()
+        base_map = {
+            # arrows
+            "up": "Up",
+            "down": "Down",
+            "left": "Left",
+            "right": "Right",
+            # paging (tmux recognizes PPage/PageUp/PgUp and NPage/PageDown/PgDn)
+            "pageup": "PageUp",
+            "page_up": "PageUp",
+            "pgup": "PgUp",
+            "pagedown": "PageDown",
+            "page_down": "PageDown",
+            "pgdn": "PgDn",
+            # editing
+            "backspace": "BSpace",
+            "bspace": "BSpace",
+            "delete": "DC",
+            "del": "DC",
+            "insert": "IC",
+            # navigation
+            "home": "Home",
+            "end": "End",
+            # whitespace / control
+            "enter": "Enter",
+            "return": "Enter",
+            "space": "Space",
+            "spacebar": "Space",
+            "tab": "Tab",
+            "shift+tab": "BTab",
+            "s-tab": "BTab",
+            "backtab": "BTab",
+            "btab": "BTab",
+            # escape
+            "esc": "Escape",
+            "escape": "Escape",
+        }
+        # Function keys f1..f12
+        if lower.startswith("f") and lower[1:].isdigit():
+            return f"F{int(lower[1:])}"
+        return base_map.get(lower, name)
+
     if len(parts) == 1:
-        return parts[0]
+        mapped = _map_base_name(parts[0])
+        if mapped != raw:
+            _logger.debug("key map: %r -> %r", raw, mapped)
+        return mapped
 
-    mods_map = {"ctrl": "C", "alt": "M", "shift": "S"}
-    mods = []
-    for part in parts[:-1]:
-        mod = mods_map.get(part.lower())
-        mods.append(mod if mod else part)
+    mods_map = {"c": "C", "ctrl": "C", "m": "M", "alt": "M", "s": "S", "shift": "S"}
+    mods: List[str] = []
+    base = parts[-1]
+    for p in parts[:-1]:
+        key_mod = mods_map.get(p.lower())
+        if key_mod:
+            mods.append(key_mod)
+        else:
+            # If a non-modifier sneaks in (e.g. user wrote "C"), keep as-is
+            mods.append(p)
 
-    base = parts[-1].lower()
-    base_map = {
-        "pageup": "PageUp",
-        "page_up": "PageUp",
-        "pgup": "PageUp",
-        "pagedown": "PageDown",
-        "page_down": "PageDown",
-        "pgdn": "PageDown",
-        "up": "Up",
-        "down": "Down",
-        "left": "Left",
-        "right": "Right",
-        "enter": "Enter",
-        "return": "Enter",
-        "space": "Space",
-        "spacebar": "Space",
-        "tab": "Tab",
-        "esc": "Escape",
-        "escape": "Escape",
-    }
-    base = base_map.get(base, base)
-    return "-".join([*mods, base])
+    base_mapped = _map_base_name(base)
+    result = "-".join([*mods, base_mapped])
+    if result != raw:
+        _logger.debug("key combo map: %r -> %r", raw, result)
+    return result
 
 
 async def tmux_send_keys_impl(params: SendKeysParams) -> Dict[str, object]:
+    _logger.info(
+        "send_keys target=%s cmds=%s text=%s keys=%s enter=%s",
+        params.target,
+        params.commands,
+        [len(t) for t in (params.text or [])] if params.text else [],
+        params.keys,
+        params.press_enter,
+    )
+    # Send commands as literal text, then optional Enter
     if params.commands:
         for command in params.commands:
-            await _run_tmux(["send-keys", "-t", params.target, command])
+            _logger.debug("send-keys -l %r", command)
+            await _run_tmux(["send-keys", "-t", params.target, "-l", command])
             if params.press_enter:
+                _logger.debug("send-keys Enter")
                 await _run_tmux(["send-keys", "-t", params.target, "Enter"])
             await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
+    # Send free text literally (-l)
     if params.text:
         for fragment in params.text:
-            await _run_tmux(["send-keys", "-t", params.target, fragment])
-            await asyncio.sleep(_POST_SEND_DELAY_SEC)
+            if fragment:
+                _logger.debug("send-keys -l (len=%d)", len(fragment))
+                await _run_tmux(["send-keys", "-t", params.target, "-l", fragment])
+                await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
+    # Batch-send key sequences in one call to preserve timing and order
     if params.keys:
+        batched: List[str] = []
         for raw_key in params.keys:
-            tmux_key = _format_tmux_key(raw_key)
-            await _run_tmux(["send-keys", "-t", params.target, tmux_key])
+            if raw_key and raw_key.strip():
+                batched.append(_format_tmux_key(raw_key))
+        if batched:
+            _logger.debug("send-keys keys=%s", batched)
+            await _run_tmux(["send-keys", "-t", params.target, *batched])
             await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
+    # Final small pause to allow the pane to update
     await asyncio.sleep(_POST_SEND_DELAY_SEC)
 
     return {
@@ -185,6 +276,7 @@ class KillSessionParams(BaseModel):
 
 
 async def tmux_kill_session_impl(params: KillSessionParams) -> Dict[str, object]:
+    _logger.info("kill-session: %s", params.session)
     await _run_tmux(["kill-session", "-t", params.session])
     return {
         "session": params.session,

@@ -15,7 +15,7 @@ class DelegateTaskParams(BaseModel):
     streaming: bool = Field(default=False, description="是否流式收集子回复")
     tool_refs: Optional[List[str]] = Field(
         default=None,
-        description="下级智能体可用工具的导入路径列表，如 'tools.system.TUI.control.create_session'",
+        description="下级智能体可用工具的列表",
     )
     reasoning_effort: Optional[str] = Field(
         default=None,
@@ -78,34 +78,47 @@ async def delegate_task_impl(params: DelegateTaskParams) -> Dict[str, Any]:
 
     tools = _load_tools(params.tool_refs) if params.tool_refs else None
 
-    async with LLMGateway(
-        model=params.model,
-        streaming=params.streaming,
-        tools=tools,
-        session_options=session_options,
-        request_timeout=params.timeout,
-    ) as gateway:
-        if params.streaming:
-            content = await gateway.ask_and_collect(
+    try:
+        async with LLMGateway(
+            model=params.model,
+            streaming=params.streaming,
+            tools=tools,
+            session_options=session_options,
+            request_timeout=params.timeout,
+        ) as gateway:
+            if params.streaming:
+                content = await gateway.ask_and_collect(
+                    params.task,
+                    metadata={"delegated": True},
+                )
+                return {
+                    "ok": True,
+                    "model": params.model,
+                    "streaming": True,
+                    "content": content,
+                    "state_hint": "if task completed, set status=done in STATE JSON",
+                }
+
+            response = await gateway.ask(
                 params.task,
                 metadata={"delegated": True},
             )
+            content = getattr(response, "content", response)
+            note = "任务已由子智能体完成，可在 STATE JSON 中标记为 done。"
             return {
+                "ok": True,
                 "model": params.model,
-                "streaming": True,
+                "streaming": False,
                 "content": content,
+                "state_hint": note,
             }
 
-        response = await gateway.ask(
-            params.task,
-            metadata={"delegated": True},
-        )
-        content = getattr(response, "content", response)
+    except Exception as exc:  # noqa: BLE001 - surface tool failures to orchestrator
         return {
+            "ok": False,
+            "error": str(exc),
             "model": params.model,
-            "streaming": False,
-            "content": content,
-            "raw_response": response,
+            "streaming": params.streaming,
         }
 
 
